@@ -1,0 +1,64 @@
+name: just_graphics_engine
+description: "3D renderer for Flutter on Flutter GPU: glTF 2.0 models, PBR materials, lights, shadows, skinned animation, image-based light and a scene widget."
+version: 0.1.0-dev.1
+homepage: https://github.com/just-unknown-dev/just-graphics-engine
+repository: https://github.com/just-unknown-dev/just-graphics-engine
+issue_tracker: https://github.com/just-unknown-dev/just-graphics-engine/issues
+topics:
+  - graphics
+  - gltf
+  - game-engine
+  - gamedev
+  - flutter-gpu
+
+# Flutter GPU draws on the five native platforms. On the web the package
+# loads and runs, and Scene3DView shows a note in place of the 3D view.
+# Declared because pub.dev's platform detection can't see past flutter_gpu,
+# which imports dart:nativewrappers (not on its list for Flutter apps).
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  windows:
+  web:
+
+environment:
+  sdk: ^3.12.2
+  # 3.47.1 is the first stable where Flutter GPU can be enabled in Windows and
+  # Linux release builds, and where ShaderLibrary loading is asynchronous.
+  flutter: ">=3.47.1"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_gpu:
+    sdk: flutter
+  flutter_gpu_shaders: ^0.5.2
+  hooks: ^2.0.0
+  just_dart: ^0.2.0
+  # Only flutter_gpu's own API (clear colours) needs the 32-bit types; the
+  # renderer uses just_dart's math.
+  vector_math: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# For information on the generic Dart part of this file, see the
+# following page: https://dart.dev/tools/pub/pubspec
+
+# The following section is specific to Flutter packages.
+flutter:
+
+  # The compiled Flutter GPU shader bundle produced by hook/build.dart.
+  # See https://flutter.dev/to/asset-from-package for how package assets
+  # are exposed to apps that depend on this package.
+  #
+  # The published package carries a copy (see .pubignore), so the asset is
+  # there before the hook first runs; the hook rebuilds it with the app's
+  # Flutter SDK. The web has no Flutter GPU, so web builds leave it out.
+  assets:
+    - path: build/shaderbundles/core.shaderbundle
+      platforms: [android, ios, linux, macos, windows]

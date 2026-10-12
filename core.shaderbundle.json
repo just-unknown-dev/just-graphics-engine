@@ -1,0 +1,74 @@
+{
+    "UnlitVertex": {
+        "type": "vertex",
+        "file": "shaders/core/unlit.vert"
+    },
+    "UnlitFragment": {
+        "type": "fragment",
+        "file": "shaders/core/unlit.frag"
+    },
+    "InstancedVertex": {
+        "type": "vertex",
+        "file": "shaders/core/instanced.vert"
+    },
+    "ColorFragment": {
+        "type": "fragment",
+        "file": "shaders/core/color.frag"
+    },
+    "LitVertex": {
+        "type": "vertex",
+        "file": "shaders/core/lit.vert"
+    },
+    "LitFragment": {
+        "type": "fragment",
+        "file": "shaders/core/lit.frag"
+    },
+    "LitSkinnedVertex": {
+        "type": "vertex",
+        "file": "shaders/core/lit_skinned.vert"
+    },
+    "LitSkinnedUniformVertex": {
+        "type": "vertex",
+        "file": "shaders/core/lit_skinned_uniform.vert"
+    },
+    "ShadowVertex": {
+        "type": "vertex",
+        "file": "shaders/core/shadow.vert"
+    },
+    "ShadowSkinnedVertex": {
+        "type": "vertex",
+        "file": "shaders/core/shadow_skinned.vert"
+    },
+    "ShadowSkinnedUniformVertex": {
+        "type": "vertex",
+        "file": "shaders/core/shadow_skinned_uniform.vert"
+    },
+    "ShadowFragment": {
+        "type": "fragment",
+        "file": "shaders/core/shadow.frag"
+    },
+    "FullscreenVertex": {
+        "type": "vertex",
+        "file": "shaders/core/fullscreen.vert"
+    },
+    "SkyFragment": {
+        "type": "fragment",
+        "file": "shaders/core/sky.frag"
+    },
+    "TonemapFragment": {
+        "type": "fragment",
+        "file": "shaders/core/tonemap.frag"
+    },
+    "BloomDownFragment": {
+        "type": "fragment",
+        "file": "shaders/core/bloom_down.frag"
+    },
+    "BloomUpFragment": {
+        "type": "fragment",
+        "file": "shaders/core/bloom_up.frag"
+    },
+    "FxaaFragment": {
+        "type": "fragment",
+        "file": "shaders/core/fxaa.frag"
+    }
+}

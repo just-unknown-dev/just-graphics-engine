@@ -13,6 +13,7 @@ import '../gpu/render_target_pool.dart';
 import '../gpu/sort_key.dart';
 import '../gpu/uniform_writer.dart';
 import 'gpu_model.dart';
+import 'instance_batch.dart';
 import 'render_scene.dart';
 import 'shadows.dart';
 import 'skinning.dart';
@@ -229,6 +230,14 @@ abstract final class RendererPipelines {
     layout: _fullscreenLayout,
   );
 
+  /// Lines over the scene: edges for a wireframe or a highlight. Reads the
+  /// same buffers a shadow draw does (positions, model matrices).
+  static const wire = PipelineSpec(
+    'WireVertex',
+    'ColorFragment',
+    layout: _shadowLayout,
+  );
+
   /// All of them.
   static const all = [
     lit,
@@ -242,6 +251,7 @@ abstract final class RendererPipelines {
     bloomDown,
     bloomUp,
     fxaa,
+    wire,
   ];
 }
 
@@ -286,6 +296,10 @@ final class RenderStats {
   /// Instances skipped by frustum culling.
   int culled = 0;
 
+  /// Instance batches drawn (each one call, its instances counted in
+  /// [instances]).
+  int batches = 0;
+
   /// Point and spot lights used.
   int lights = 0;
 
@@ -296,7 +310,8 @@ final class RenderStats {
   String toString() =>
       'RenderStats(draws $drawCalls (shadow $shadowDrawCalls), instances '
       '$instances (skinned $skinnedInstances), casters $shadowCasters, '
-      'triangles $triangles, culled $culled, lights $lights, joints $joints)';
+      'triangles $triangles, culled $culled, batches $batches, lights $lights, '
+      'joints $joints)';
 }
 
 /// The uniforms and textures every lit draw of a frame binds.
@@ -399,6 +414,17 @@ final class Renderer3D {
   /// without MSAA ([msaa] off, or not supported).
   bool fxaa = false;
 
+  /// How the scene is drawn: lit, as the game draws it; unlit, to read
+  /// shapes by; or as edges only (an editor's views).
+  RenderViewMode viewMode = RenderViewMode.lit;
+
+  /// A slice through the scene: nothing on the far side of the plane —
+  /// (normal x, y, z, distance along it) — is drawn. Null for none.
+  (double, double, double, double)? clipPlane;
+
+  /// The colour [RenderViewMode.wireframe] draws edges in.
+  (double, double, double, double) wireColor = (0.78, 0.82, 0.88, 0.85);
+
   /// How joint palettes reach the GPU: a texture where the device can read
   /// float textures in the vertex stage, else uniform blocks.
   SkinningMode skinning;
@@ -422,6 +448,9 @@ final class Renderer3D {
   final List<(int, MeshInstance)> _transparent = [];
   final List<List<(int, MeshInstance)>> _casters = [[], []];
   final Map<GpuMaterial, int> _materialIds = {};
+  final List<InstanceBatch> _batches = [];
+  final List<List<InstanceBatch>> _batchCasters = [[], []];
+  final Float32List _single = Float32List(kBatchInstanceFloats);
   final Map<GpuPrimitive, int> _primitiveIds = {};
   final List<SkinPalette> _palettes = [];
   Float32List _instanceData = Float32List(_skinnedInstanceFloats * 256);
@@ -476,12 +505,18 @@ final class Renderer3D {
         }
       }
     }
+    // Lines only: nothing to shadow.
+    if (viewMode == RenderViewMode.wireframe) _cascades = 0;
     final shadowed = _cascades > 0;
     for (final list in _casters) {
       list.clear();
     }
+    for (final list in _batchCasters) {
+      list.clear();
+    }
     for (var c = 0; c < _cascades; c++) {
       _collectCasters(scene, _shadowFits[c], _casters[c]);
+      _collectBatchCasters(scene, view, _shadowFits[c], _batchCasters[c]);
     }
     final joints = skinning == SkinningMode.texture ? _packPalettes() : null;
 
@@ -494,7 +529,13 @@ final class Renderer3D {
     final commands = device.commands();
     final maps = [
       for (var c = 0; c < _cascades; c++)
-        _shadowPass(commands, joints, _shadowFits[c], _casters[c]),
+        _shadowPass(
+          commands,
+          joints,
+          _shadowFits[c],
+          _casters[c],
+          _batchCasters[c],
+        ),
     ];
     final bindings = _LitBindings(
       frameUniforms,
@@ -558,7 +599,11 @@ final class Renderer3D {
     final pass = commands.beginPass(
       GpuRenderTargets([color], depth: GpuDepthTarget(depth)),
     );
-    _drawList(pass, _opaque, bindings, transparent: false);
+    final filled = viewMode != RenderViewMode.wireframe;
+    if (filled) {
+      _drawList(pass, _opaque, bindings, transparent: false);
+      _drawBatches(pass, bindings);
+    }
 
     if (env.sky) {
       final sky = _pipelines[RendererPipelines.sky];
@@ -581,9 +626,13 @@ final class Renderer3D {
       stats.drawCalls++;
     }
 
-    if (_transparent.isNotEmpty) {
+    if (filled && _transparent.isNotEmpty) {
       _drawList(pass, _transparent, bindings, transparent: true);
     }
+    // Lines last: a wireframe's every edge, then what is drawn over the
+    // scene (a selection's highlight).
+    if (!filled) _drawWireframe(pass);
+    if (scene.overlays.isNotEmpty) _drawOverlays(pass, scene.overlays);
 
     if (hdr) {
       final glow = bloom.enabled && bloom.intensity > 0
@@ -745,6 +794,7 @@ final class Renderer3D {
       ..shadowCasters = 0
       ..triangles = 0
       ..culled = 0
+      ..batches = 0
       ..lights = 0
       ..joints = 0;
   }
@@ -806,6 +856,178 @@ final class Renderer3D {
     }
     _opaque.sort((a, b) => a.$1.compareTo(b.$1));
     _transparent.sort((a, b) => a.$1.compareTo(b.$1));
+    _collectBatches(scene, view);
+  }
+
+  /// The batches seen from [view]: visible, in the frustum and within
+  /// their reach, by material so each material is bound once.
+  void _collectBatches(RenderScene scene, RenderView view) {
+    _batches.clear();
+    for (final batch in scene.batches) {
+      if (!batch.visible || batch.count == 0) continue;
+      if (!_frustum.intersectsAabb(batch.bounds) ||
+          !_withinReach(batch, view)) {
+        stats.culled += batch.count;
+        continue;
+      }
+      _batches.add(batch);
+    }
+    int materialOf(InstanceBatch b) =>
+        _materialIds.putIfAbsent(b.material, () => _materialIds.length);
+    _batches.sort((a, b) {
+      final m = materialOf(a).compareTo(materialOf(b));
+      return m != 0
+          ? m
+          : _primitiveId(a.primitive).compareTo(_primitiveId(b.primitive));
+    });
+  }
+
+  /// Whether [batch]'s nearest point is within its reach of the camera.
+  static bool _withinReach(InstanceBatch batch, RenderView view) {
+    final reach = batch.maxDistance;
+    if (!reach.isFinite) return true;
+    final b = batch.bounds, c = view.cameraPosition;
+    double gap(double v, double lo, double hi) =>
+        v < lo ? lo - v : (v > hi ? v - hi : 0);
+    final dx = gap(c.x, b.min.x, b.max.x);
+    final dy = gap(c.y, b.min.y, b.max.y);
+    final dz = gap(c.z, b.min.z, b.max.z);
+    return dx * dx + dy * dy + dz * dz <= reach * reach;
+  }
+
+  /// The batches casting into [fit]'s shadow map, into [casters].
+  void _collectBatchCasters(
+    RenderScene scene,
+    RenderView view,
+    ShadowFit fit,
+    List<InstanceBatch> casters,
+  ) {
+    for (final batch in scene.batches) {
+      if (!batch.visible || !batch.castShadows || batch.count == 0) continue;
+      if (!_withinReach(batch, view)) continue;
+      if (!fit.frustum.intersectsAabb(batch.bounds)) continue;
+      casters.add(batch);
+      stats.shadowCasters += batch.count;
+    }
+  }
+
+  /// [batch]'s instances on the GPU, uploaded again when they changed.
+  GpuBufferView _batchBuffer(InstanceBatch batch) {
+    var buffer = batch.buffer;
+    if (buffer == null || batch.uploaded != batch.revision) {
+      final data = batch.data;
+      buffer = batch.buffer = device.createBuffer(
+        data.buffer.asByteData(data.offsetInBytes, data.lengthInBytes),
+      );
+      batch.uploaded = batch.revision;
+    }
+    return buffer.view();
+  }
+
+  /// Draws the batches collected for this frame, each in one call.
+  void _drawBatches(GpuPass pass, _LitBindings bindings) {
+    if (_batches.isEmpty) return;
+    final lit = _pipelines[RendererPipelines.lit];
+    _bindLit(pass, false, bindings, transparent: false);
+    GpuMaterial? bound;
+    for (final batch in _batches) {
+      if (!identical(bound, batch.material)) {
+        _bindMaterial(pass, lit, batch.material, transparent: false);
+        bound = batch.material;
+      }
+      final primitive = batch.primitive;
+      pass
+        ..setVertexBuffer(0, primitive.vertices.view())
+        ..setVertexBuffer(1, _batchBuffer(batch))
+        ..setIndexBuffer(primitive.indices.view(), primitive.indexType)
+        ..drawIndexed(primitive.indexCount, instances: batch.count);
+      stats
+        ..drawCalls += 1
+        ..batches += 1
+        ..instances += batch.count
+        ..triangles += primitive.indexCount ~/ 3 * batch.count;
+    }
+  }
+
+  /// One instance at [world], as a frame's data.
+  GpuBufferView _oneInstance(Matrix4 world) {
+    InstanceBatch.writeInstance(_single, 0, world);
+    return device.frameData(_single.buffer.asByteData());
+  }
+
+  /// Draws [primitive]'s edges, [count] times as [instances] place them.
+  /// Nothing without edges ([ModelUploader.keepEdges]).
+  void _drawEdges(
+    GpuPass pass,
+    GpuPrimitive primitive,
+    GpuBufferView instances,
+    int count,
+    (double, double, double, double) color, {
+    required bool xray,
+  }) {
+    final edges = primitive.edges;
+    if (edges == null || primitive.edgeIndexCount == 0) return;
+    final wire = _pipelines[RendererPipelines.wire];
+    final block = wire.uniformBlock('Overlay')!;
+    final w = UniformWriter(block.sizeInBytes)
+      ..matrix4(block.offsetOf('view_projection')!, _gpuViewProjection)
+      ..vec4(block.offsetOf('color')!, color.$1, color.$2, color.$3, color.$4)
+      // Pulled towards the eye so an edge wins over its own faces.
+      ..vec4(block.offsetOf('options')!, xray ? 0 : 0.0004, 0, 0, 0);
+    pass
+      ..setPipeline(wire)
+      ..setTopology(GpuTopology.lines)
+      ..setUniforms('Overlay', device.frameData(w.bytes))
+      ..setDepth(test: !xray, write: false, compare: GpuCompare.lessEqual)
+      ..setCull(GpuCull.none)
+      ..setBlend(GpuBlend.alpha)
+      ..setVertexBuffer(0, primitive.vertices.view())
+      ..setVertexBuffer(1, instances)
+      ..setIndexBuffer(edges.view(), GpuIndexType.uint32)
+      ..drawIndexed(primitive.edgeIndexCount, instances: count);
+    stats.drawCalls++;
+  }
+
+  /// [RenderViewMode.wireframe]: every visible thing's edges.
+  void _drawWireframe(GpuPass pass) {
+    for (final list in [_opaque, _transparent]) {
+      for (final (_, instance) in list) {
+        _drawEdges(
+          pass,
+          instance.primitive,
+          _oneInstance(instance.world),
+          1,
+          wireColor,
+          xray: true,
+        );
+      }
+    }
+    for (final batch in _batches) {
+      _drawEdges(
+        pass,
+        batch.primitive,
+        _batchBuffer(batch),
+        batch.count,
+        wireColor,
+        xray: true,
+      );
+    }
+    pass.setTopology(GpuTopology.triangles);
+  }
+
+  /// The lines drawn over the scene.
+  void _drawOverlays(GpuPass pass, List<OverlayDraw> overlays) {
+    for (final o in overlays) {
+      _drawEdges(
+        pass,
+        o.primitive,
+        _oneInstance(o.world),
+        1,
+        o.color,
+        xray: o.xray,
+      );
+    }
+    pass.setTopology(GpuTopology.triangles);
   }
 
   /// The instances casting into [fit]'s shadow map, into [casters]:
@@ -897,6 +1119,7 @@ final class Renderer3D {
     GpuTexture? joints,
     ShadowFit fit,
     List<(int, MeshInstance)> casters,
+    List<InstanceBatch> batchCasters,
   ) {
     final size = shadows.mapSize;
     final map = targets.acquire(
@@ -998,6 +1221,25 @@ final class Renderer3D {
         ..drawCalls += 1
         ..shadowDrawCalls += 1;
       start = end;
+    }
+    if (batchCasters.isNotEmpty) {
+      pass
+        ..setPipeline(_pipelines[RendererPipelines.shadow])
+        ..setUniforms('Shadow', shadowUniforms)
+        ..setDepth()
+        ..setCull(GpuCull.none)
+        ..setBlend(GpuBlend.off);
+      for (final batch in batchCasters) {
+        final primitive = batch.primitive;
+        pass
+          ..setVertexBuffer(0, primitive.vertices.view())
+          ..setVertexBuffer(1, _batchBuffer(batch))
+          ..setIndexBuffer(primitive.indices.view(), primitive.indexType)
+          ..drawIndexed(primitive.indexCount, instances: batch.count);
+        stats
+          ..drawCalls += 1
+          ..shadowDrawCalls += 1;
+      }
     }
     return map;
   }
@@ -1182,7 +1424,7 @@ final class Renderer3D {
         m.unlit ? 1 : 0,
         m.alphaMode.index.toDouble(),
         m.doubleSided ? 1 : 0,
-        0,
+        m.layered ? 2 : (m.uvMode == UvMode.world ? 1 : 0),
       )
       ..vec4(
         at('uv_transform'),
@@ -1191,7 +1433,14 @@ final class Renderer3D {
         ref.scale.$1,
         ref.scale.$2,
       )
-      ..vec4(at('uv_rotation'), ref.rotation, 0, 0, 0);
+      ..vec4(at('uv_rotation'), ref.rotation, 0, 0, 0)
+      ..vec4(
+        at('layers'),
+        m.layerTiling.$1,
+        m.layerTiling.$2,
+        m.layerTiling.$3,
+        m.layerTiling.$4,
+      );
     final buffer = device.createHostBuffer(w.sizeInBytes);
     buffer.write(w.bytes);
     return buffer;
@@ -1309,7 +1558,17 @@ final class Renderer3D {
         env.ambientGround.$3,
         0,
       )
-      ..vec4(at('options'), env.exposure, toDisplay ? 1 : 0, 0, 0);
+      ..vec4(
+        at('options'),
+        env.exposure,
+        toDisplay ? 1 : 0,
+        viewMode == RenderViewMode.unlit ? 1 : 0,
+        0,
+      );
+    final clip = clipPlane;
+    if (clip != null) {
+      w.vec4(at('clip_plane'), clip.$1, clip.$2, clip.$3, clip.$4);
+    }
     if (env.fogDensity > 0) {
       w
         ..vec4(

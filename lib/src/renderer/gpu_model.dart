@@ -67,8 +67,10 @@ final class GpuPrimitive {
     this.indexType,
     this.material,
     this.bounds,
-    this.skin,
-  );
+    this.skin, {
+    this.edges,
+    this.edgeIndexCount = 0,
+  });
 
   /// [kVertexFloats] floats per vertex.
   final GpuBuffer vertices;
@@ -91,6 +93,32 @@ final class GpuPrimitive {
   /// Joints and weights ([kSkinFloats] floats per vertex) of a skinned
   /// primitive, else null.
   final GpuBuffer? skin;
+
+  /// Its triangles' edges, each once, as pairs of 32-bit indices: what a
+  /// wireframe or a selection's highlight draws. Kept only when the
+  /// uploader was asked ([ModelUploader.keepEdges]); null otherwise.
+  final GpuBuffer? edges;
+
+  /// How many indices [edges] holds: two per edge.
+  final int edgeIndexCount;
+
+  /// The unique edges of the triangles in [indices], as index pairs.
+  static Uint32List edgesOf(List<int> indices) {
+    final seen = <int>{};
+    final out = <int>[];
+    for (var t = 0; t + 2 < indices.length; t += 3) {
+      for (var k = 0; k < 3; k++) {
+        final a = indices[t + k], b = indices[t + (k + 1) % 3];
+        final lo = a < b ? a : b, hi = a < b ? b : a;
+        if (seen.add(lo * 0x100000000 + hi)) {
+          out
+            ..add(lo)
+            ..add(hi);
+        }
+      }
+    }
+    return Uint32List.fromList(out);
+  }
 }
 
 /// A material's textures and settings, ready to bind.
@@ -188,6 +216,11 @@ final class ModelUploader {
   /// Stand-ins for missing maps.
   final DefaultTextures defaults;
 
+  /// Whether each primitive keeps its edges ([GpuPrimitive.edges]) for
+  /// lines drawn over the scene: on in an editor, off in a game, which
+  /// never draws them.
+  bool keepEdges = false;
+
   /// Uploads [data]: buffers now, then each texture it uses, decoded once
   /// per image and colour space, with a full mip chain when its sampler
   /// mipmaps.
@@ -247,16 +280,32 @@ final class ModelUploader {
   /// A material of [data] drawing [baseColor] (its texture and sampler)
   /// where it has one, and the default maps everywhere else: a material
   /// made in code (a shape's), sharing textures it was given.
+  ///
+  /// [maps] gives any of the five — base colour, metal-rough, normal,
+  /// occlusion, emissive, in that order; a null one is the default — and
+  /// wins over [baseColor]. A layered material ([MaterialData.layered])
+  /// passes its four colour layers as the first four.
   GpuMaterial material(
     MaterialData data, {
     (GpuTexture, GpuSampler)? baseColor,
-  }) => GpuMaterial._(data, [
-    baseColor ?? (defaults.whiteSrgb, GpuSampler.linearRepeat),
-    (defaults.white, GpuSampler.linearRepeat),
-    (defaults.flatNormal, GpuSampler.linearRepeat),
-    (defaults.white, GpuSampler.linearRepeat),
-    (defaults.whiteSrgb, GpuSampler.linearRepeat),
-  ]);
+    List<(GpuTexture, GpuSampler)?>? maps,
+  }) {
+    (GpuTexture, GpuSampler) at(int i, (GpuTexture, GpuSampler) fallback) =>
+        (maps != null && i < maps.length ? maps[i] : null) ?? fallback;
+    // A layer missing from a layered material is plain white, not a
+    // normal map's flat blue.
+    final layered = data.layered;
+    return GpuMaterial._(data, [
+      at(0, baseColor ?? (defaults.whiteSrgb, GpuSampler.linearRepeat)),
+      at(1, (defaults.white, GpuSampler.linearRepeat)),
+      at(
+        2,
+        (layered ? defaults.whiteSrgb : defaults.flatNormal, GpuSampler.linearRepeat),
+      ),
+      at(3, (defaults.white, GpuSampler.linearRepeat)),
+      at(4, (defaults.whiteSrgb, GpuSampler.linearRepeat)),
+    ]);
+  }
 
   /// Decodes the encoded image [bytes] (PNG, JPEG, …) and uploads it with
   /// a full chain of mips, as a colour ([srgb]) or a data map; null when
@@ -286,6 +335,7 @@ final class ModelUploader {
     } else {
       indexBytes = Uint32List.fromList(p.indices).buffer.asByteData();
     }
+    final edges = keepEdges ? GpuPrimitive.edgesOf(p.indices) : null;
     return GpuPrimitive._(
       device.createBuffer(
         p.vertices.buffer.asByteData(
@@ -306,6 +356,10 @@ final class ModelUploader {
                 p.skin!.lengthInBytes,
               ),
             ),
+      edges: edges == null || edges.isEmpty
+          ? null
+          : device.createBuffer(edges.buffer.asByteData()),
+      edgeIndexCount: edges?.length ?? 0,
     );
   }
 

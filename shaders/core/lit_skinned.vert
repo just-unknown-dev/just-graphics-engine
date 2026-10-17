@@ -43,6 +43,7 @@ uniform Frame {
   vec4 camera_forward;
   vec4 ibl;             // x: reflection strength (0 = the hemisphere), y: blurriest level, z: 1 = SH diffuse
   vec4 sh[9];           // diffuse light as spherical harmonics, rgb each
+  vec4 clip_plane;      // a slice: xyz its normal, w how far; nothing beyond it is drawn (xyz 0: none)
 } frame;
 
 uniform sampler2D joint_texture;

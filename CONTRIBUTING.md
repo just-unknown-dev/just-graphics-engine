@@ -94,7 +94,7 @@ Then run `flutter pub get`. Delete the file (or the entry) and run `flutter pub 
 
 Do not change `pubspec.yaml` to a path dependency. If your pull request needs a version of `just_dart` that is not published yet, say so in the pull request: this package can only be released after it.
 
-`just_game_engine` (its `graphics_3d.dart`) and `just_graphics_editor` (the editor's 3D side) depend on this package, and `just_cli`'s `create` command writes the Flutter GPU switches into the runners of any new 3D game (`ProjectTemplate.flutterGpuRunners`). If you change the public API, a file format or how Flutter GPU is turned on, say in the pull request what they will need.
+`just_game_engine` (its `graphics_3d.dart`) and `just_graphics_editor` (the editor's 3D side) depend on this package, and `just_game_engine_cli` (the game commands of `just`) writes the Flutter GPU switches into the runners of any new 3D game when `just create` makes it (`GameTemplate.flutterGpuRunners`). If you change the public API, a file format or how Flutter GPU is turned on, say in the pull request what they will need.
 
 ---
 

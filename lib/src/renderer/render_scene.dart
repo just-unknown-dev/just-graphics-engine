@@ -3,6 +3,7 @@ import 'package:just_dart/just_dart.dart';
 import '../assets/model_data.dart' show LightType;
 import 'environment_map.dart';
 import 'gpu_model.dart';
+import 'instance_batch.dart';
 import 'posed_model.dart';
 import 'skinning.dart';
 
@@ -189,6 +190,12 @@ final class Environment {
 final class RenderScene {
   /// Mesh instances.
   final List<MeshInstance> instances = [];
+
+  /// Many copies of a mesh each, drawn in a call each: grass, tiles.
+  final List<InstanceBatch> batches = [];
+
+  /// Lines drawn over everything else: a selection's highlight.
+  final List<OverlayDraw> overlays = [];
 
   /// The sun.
   final DirectionalLight sun = DirectionalLight();

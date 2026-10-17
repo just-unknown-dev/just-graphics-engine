@@ -18,13 +18,14 @@ final Map<String, Map<String, NullUniformBlock>> rendererNullShaders = {
       'direction': 272,
       'cone': 400,
     }),
-    'Material': const NullUniformBlock('Material', 96, {
+    'Material': const NullUniformBlock('Material', 112, {
       'base_color': 0,
       'emissive': 16,
       'params': 32,
       'flags': 48,
       'uv_transform': 64,
       'uv_rotation': 80,
+      'layers': 96,
     }),
   },
   'ShadowVertex': {'Shadow': _shadow},
@@ -62,6 +63,14 @@ final Map<String, Map<String, NullUniformBlock>> rendererNullShaders = {
   'FxaaFragment': {
     'Fxaa': const NullUniformBlock('Fxaa', 16, {'texel': 0}),
   },
+  'WireVertex': {
+    'Overlay': const NullUniformBlock('Overlay', 128, {
+      'view_projection': 0,
+      'color': 64,
+      'options': 80,
+    }),
+  },
+  'ColorFragment': const {},
 };
 
 const _frame = NullUniformBlock('Frame', 576, {
@@ -81,6 +90,7 @@ const _frame = NullUniformBlock('Frame', 576, {
   'camera_forward': 352,
   'ibl': 368,
   'sh': 384,
+  'clip_plane': 528,
 });
 
 const _shadow = NullUniformBlock('Shadow', 64, {'light_view_projection': 0});

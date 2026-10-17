@@ -192,6 +192,9 @@ final class MaterialData {
     this.alphaCutoff = 0.5,
     this.doubleSided = false,
     this.unlit = false,
+    this.uvMode = UvMode.natural,
+    this.layered = false,
+    this.layerTiling = const (1.0, 1.0, 1.0, 1.0),
   });
 
   /// The material used where a primitive names none.
@@ -247,6 +250,30 @@ final class MaterialData {
 
   /// `KHR_materials_unlit`: base colour only, no lighting.
   final bool unlit;
+
+  /// Where its textures are read: the mesh's own UVs, or the world's
+  /// coordinates seen along the face's main axis — tiled per metre by the
+  /// base colour texture's scale, the same on every face and size.
+  final UvMode uvMode;
+
+  /// Four colour layers instead of the maps: base colour, metal-rough,
+  /// normal and occlusion hold the layers, blended by the vertex colour
+  /// (R, G, B, A weigh them) and read in world coordinates tiled per metre
+  /// by [layerTiling]. What a terrain is painted with. No normal map then.
+  final bool layered;
+
+  /// How many times each of the four layers repeats per metre.
+  final (double, double, double, double) layerTiling;
+}
+
+/// Where a material's textures are read.
+enum UvMode {
+  /// The mesh's own texture coordinates.
+  natural,
+
+  /// The world's, seen along each face's main axis: a texture tiles the
+  /// same way on every face, whatever the mesh's size.
+  world,
 }
 
 /// A material's use of a texture.

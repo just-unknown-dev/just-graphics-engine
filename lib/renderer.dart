@@ -10,6 +10,7 @@ library;
 export 'src/renderer/dynamic_resolution.dart';
 export 'src/renderer/environment_map.dart';
 export 'src/renderer/gpu_model.dart';
+export 'src/renderer/instance_batch.dart';
 export 'src/renderer/null_shaders.dart';
 export 'src/renderer/posed_model.dart';
 export 'src/renderer/render_scene.dart';

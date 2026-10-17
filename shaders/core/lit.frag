@@ -25,7 +25,7 @@ uniform Frame {
   vec4 sun_color;       // rgb * intensity
   vec4 ambient_sky;
   vec4 ambient_ground;
-  vec4 options;         // x: exposure, y: 1 = tonemapped sRGB
+  vec4 options;         // x: exposure, y: 1 = tonemapped sRGB, z: 1 = unlit view
   mat4 light_view_projection;
   vec4 shadow;          // x: strength (0 = off), y: normal offset, z: texel (uv), w: bias
   vec4 fog;             // rgb: colour (linear); a: density per metre (0 = none)
@@ -35,6 +35,7 @@ uniform Frame {
   vec4 camera_forward;
   vec4 ibl;             // x: reflection strength (0 = the hemisphere), y: blurriest level, z: 1 = SH diffuse
   vec4 sh[9];           // diffuse light as spherical harmonics, rgb each
+  vec4 clip_plane;      // a slice: xyz its normal, w how far; nothing beyond it is drawn (xyz 0: none)
 } frame;
 
 #define MAX_LIGHTS 8
@@ -50,9 +51,11 @@ uniform Material {
   vec4 base_color;     // linear rgba
   vec4 emissive;       // rgb * strength; a: alpha cutoff
   vec4 params;         // metallic, roughness, normal scale, occlusion strength
-  vec4 flags;          // x: unlit, y: alpha mode (0 opaque, 1 mask, 2 blend), z: double sided
+  vec4 flags;          // x: unlit, y: alpha mode (0 opaque, 1 mask, 2 blend), z: double sided,
+                       // w: 0 mesh UVs, 1 world UVs, 2 layered
   vec4 uv_transform;   // offset.xy, scale.xy (KHR_texture_transform)
   vec4 uv_rotation;    // x: rotation
+  vec4 layers;         // layered: each layer's repeats per metre
 } material;
 
 uniform sampler2D base_color_texture;
@@ -81,6 +84,16 @@ vec2 transformed_uv() {
   mat3 scale = mat3(material.uv_transform.z, 0.0, 0.0,
                     0.0, material.uv_transform.w, 0.0, 0.0, 0.0, 1.0);
   return (translation * rotation * scale * vec3(v_texcoord, 1.0)).xy;
+}
+
+// A point in the world seen along the main axis of n: texture coordinates
+// that tile the same on every face, whatever its size (+Y is down: the
+// ground is read as x, z).
+vec2 planar(vec3 p, vec3 n) {
+  vec3 a = abs(n);
+  if (a.y >= a.x && a.y >= a.z) return p.xz;
+  if (a.x >= a.z) return p.zy;
+  return p.xy;
 }
 
 float d_ggx(float n_dot_h, float a) {
@@ -201,34 +214,73 @@ vec3 to_srgb(vec3 linear) {
 }
 
 void main() {
-  vec2 uv = transformed_uv();
-  vec4 base = texture(base_color_texture, uv) * material.base_color * v_color;
+  // A slice (the editor's): nothing beyond the plane.
+  if (dot(frame.clip_plane.xyz, frame.clip_plane.xyz) > 0.0 &&
+      dot(v_world, frame.clip_plane.xyz) > frame.clip_plane.w) {
+    discard;
+  }
+  float mode = material.flags.w;
+  bool layered = mode > 1.5;
+  vec3 face = normalize(v_normal);
+  vec2 uv = mode > 0.5 && !layered
+      ? planar(v_world, face) * material.uv_transform.zw + material.uv_transform.xy
+      : transformed_uv();
+  vec4 base;
+  if (layered) {
+    // Four colour layers weighed by the vertex colour, each tiled per metre.
+    vec2 p = planar(v_world, face);
+    vec4 w = max(v_color, vec4(0.0));
+    float sum = w.r + w.g + w.b + w.a;
+    w = sum > 1e-4 ? w / sum : vec4(1.0, 0.0, 0.0, 0.0);
+    base = (texture(base_color_texture, p * material.layers.x) * w.r +
+            texture(metallic_roughness_texture, p * material.layers.y) * w.g +
+            texture(normal_texture, p * material.layers.z) * w.b +
+            texture(occlusion_texture, p * material.layers.w) * w.a) *
+           material.base_color;
+  } else {
+    base = texture(base_color_texture, uv) * material.base_color * v_color;
+  }
   float alpha_mode = material.flags.y;
   if (alpha_mode > 0.5 && alpha_mode < 1.5 && base.a < material.emissive.a) discard;
 
   vec3 color;
   if (material.flags.x > 0.5) {
     color = base.rgb;
+  } else if (frame.options.z > 0.5) {
+    // The editor's unlit view: the colours, shaded a little by facing so
+    // shapes still read.
+    vec3 v = normalize(frame.camera_position.xyz - v_world);
+    color = base.rgb * (0.55 + 0.45 * abs(dot(face, v)));
   } else {
-    vec3 n = normalize(v_normal);
+    vec3 n = face;
     if (material.flags.z > 0.5 && !gl_FrontFacing) n = -n;
-    vec3 tangent_normal = texture(normal_texture, uv).xyz * 2.0 - 1.0;
-    tangent_normal.xy *= material.params.z;
-    mat3 tbn;
-    if (dot(v_tangent.xyz, v_tangent.xyz) > 1e-8) {
-      vec3 t = normalize(v_tangent.xyz - n * dot(n, v_tangent.xyz));
-      vec3 b = cross(n, t) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
-      tbn = mat3(t, b, n);
+    float metallic;
+    float roughness;
+    float occlusion;
+    if (layered) {
+      // The maps hold layers: no normal map, metal-rough or occlusion.
+      metallic = clamp(material.params.x, 0.0, 1.0);
+      roughness = clamp(material.params.y, 0.089, 1.0);
+      occlusion = 1.0;
     } else {
-      tbn = cotangent_frame(n, v_world, uv);
-    }
-    n = normalize(tbn * tangent_normal);
+      vec3 tangent_normal = texture(normal_texture, uv).xyz * 2.0 - 1.0;
+      tangent_normal.xy *= material.params.z;
+      mat3 tbn;
+      if (dot(v_tangent.xyz, v_tangent.xyz) > 1e-8) {
+        vec3 t = normalize(v_tangent.xyz - n * dot(n, v_tangent.xyz));
+        vec3 b = cross(n, t) * (v_tangent.w < 0.0 ? -1.0 : 1.0);
+        tbn = mat3(t, b, n);
+      } else {
+        tbn = cotangent_frame(n, v_world, uv);
+      }
+      n = normalize(tbn * tangent_normal);
 
-    vec4 mr = texture(metallic_roughness_texture, uv);
-    float metallic = clamp(material.params.x * mr.b, 0.0, 1.0);
-    // 0.089 keeps the GGX lobe stable at half precision (Filament).
-    float roughness = clamp(material.params.y * mr.g, 0.089, 1.0);
-    float occlusion = mix(1.0, texture(occlusion_texture, uv).r, material.params.w);
+      vec4 mr = texture(metallic_roughness_texture, uv);
+      metallic = clamp(material.params.x * mr.b, 0.0, 1.0);
+      // 0.089 keeps the GGX lobe stable at half precision (Filament).
+      roughness = clamp(material.params.y * mr.g, 0.089, 1.0);
+      occlusion = mix(1.0, texture(occlusion_texture, uv).r, material.params.w);
+    }
 
     vec3 diffuse_color = base.rgb * (1.0 - metallic);
     vec3 f0 = mix(vec3(0.04), base.rgb, metallic);
@@ -275,7 +327,7 @@ void main() {
     color += (ambient_diffuse + ambient_specular) * occlusion;
   }
 
-  color += texture(emissive_texture, uv).rgb * material.emissive.rgb;
+  if (!layered) color += texture(emissive_texture, uv).rgb * material.emissive.rgb;
 
   // Distance fog: exponential beyond its start.
   if (frame.fog.a > 0.0) {

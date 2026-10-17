@@ -1,6 +1,6 @@
 name: just_graphics_engine
 description: "3D renderer for Flutter on Flutter GPU: glTF 2.0 models, PBR materials, lights, shadows, skinned animation, image-based light and a scene widget."
-version: 0.1.0-dev.1
+version: 0.1.0-dev.2
 homepage: https://github.com/just-unknown-dev/just-graphics-engine
 repository: https://github.com/just-unknown-dev/just-graphics-engine
 issue_tracker: https://github.com/just-unknown-dev/just-graphics-engine/issues

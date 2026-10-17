@@ -1,3 +1,10 @@
+## 0.1.0-dev.2
+
+* Instance batches: `InstanceBatch` in `RenderScene.batches`, each in a persistent instance buffer, culled whole and beyond its reach, casting shadows; `Stats.batches`.
+* Overlays and wireframes: `OverlayDraw` in `RenderScene.overlays`, drawn last with line topology; `GpuPrimitive.edges` (`ModelUploader(keepEdges:)`).
+* View modes (`RenderViewMode`: lit, unlit, wireframe), a clip plane, and the editor's unlit view in the lit shader.
+* Layered materials (`MaterialData.layered`: four colour layers weighed by vertex colour) and texture coordinates in metres or from the world (`MaterialData.uvMode`); `ModelUploader.material(maps:)` takes every map.
+
 ## 0.1.0-dev.1
 
 First release, a dev release: a 3D renderer for Flutter on Flutter GPU, standing alone (no game engine) and drawing the 3D of just_game_engine. Requires Flutter 3.47.1 or newer.

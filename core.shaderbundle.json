@@ -70,5 +70,9 @@
     "FxaaFragment": {
         "type": "fragment",
         "file": "shaders/core/fxaa.frag"
+    },
+    "WireVertex": {
+        "type": "vertex",
+        "file": "shaders/core/wire.vert"
     }
 }

@@ -11,6 +11,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 import '../caps.dart';
 import '../device.dart';
 import '../formats.dart';
+import '../frame_arenas.dart';
 import '../shader_bundle_loader.dart';
 
 /// Creates the Flutter GPU device, or returns null and calls [onUnsupported]
@@ -38,12 +39,25 @@ GpuDevice? createGpuDevice({void Function(String reason)? onUnsupported}) {
 
 /// [GpuDevice] on Flutter GPU.
 final class FlutterGpuDevice implements GpuDevice {
-  FlutterGpuDevice._(this._context)
-    : caps = _capsOf(_context),
-      _frame = _context.createHostBuffer(blockLengthInBytes: 4 * 1024 * 1024);
+  FlutterGpuDevice._(this._context) : caps = _capsOf(_context) {
+    _frames = FrameArenas<gpu.DeviceBuffer>(
+      alignment: _context.minimumUniformByteAlignment,
+      create: (size) =>
+          _context.createDeviceBuffer(gpu.StorageMode.hostVisible, size),
+      sizeOf: (block) => block.sizeInBytes,
+      write: (block, offset, data) {
+        if (!block.overwrite(data, destinationOffsetInBytes: offset)) {
+          throw StateError('Frame data write failed.');
+        }
+        block.flush(offsetInBytes: offset, lengthInBytes: data.lengthInBytes);
+      },
+    );
+  }
 
   final gpu.GpuContext _context;
-  final gpu.HostBuffer _frame;
+  // Not Flutter GPU's HostBuffer: it reuses a frame's memory four frames
+  // later, read by the GPU or not (see FrameArenas).
+  late final FrameArenas<gpu.DeviceBuffer> _frames;
   final Map<String, Future<GpuShaderLibrary>> _libraries = {};
   final Map<(GpuShader, GpuShader, String), _Pipeline> _pipelines = {};
 
@@ -135,13 +149,22 @@ final class FlutterGpuDevice implements GpuDevice {
   }
 
   @override
-  void beginFrame() => _frame.reset();
+  void beginFrame() => _frames.beginFrame();
 
   @override
-  GpuBufferView frameData(ByteData data) => _View(_frame.emplace(data));
+  GpuBufferView frameData(ByteData data) {
+    final (block, offset) = _frames.place(data);
+    return _View(
+      gpu.BufferView(
+        block,
+        offsetInBytes: offset,
+        lengthInBytes: data.lengthInBytes,
+      ),
+    );
+  }
 
   @override
-  GpuCommands commands() => _Commands(_context);
+  GpuCommands commands() => _Commands(_context, _frames);
 
   @override
   GpuSurface createSurface(int width, int height) =>
@@ -279,10 +302,17 @@ final class _Pipeline implements GpuPipeline {
 /// command buffer of its own, submitted in order: two render passes in one
 /// command buffer, where the second samples what the first drew, crash on
 /// Impeller's Vulkan backend (measured on 3.47.6).
+///
+/// It holds the frame data it may read — the frame's when it was made and
+/// when it is submitted — until the GPU has finished it.
 final class _Commands implements GpuCommands {
-  _Commands(this._context);
+  _Commands(this._context, this._frames) {
+    _held.add(_frames.hold(_frames.current));
+  }
 
   final gpu.GpuContext _context;
+  final FrameArenas<gpu.DeviceBuffer> _frames;
+  final List<FrameArena<gpu.DeviceBuffer>> _held = [];
   final List<gpu.CommandBuffer> _buffers = [];
 
   @override
@@ -308,14 +338,27 @@ final class _Commands implements GpuCommands {
     if (present != null) {
       (present as _SurfaceFrame).native.present(_buffers.last);
     }
+    final current = _frames.current;
+    if (!_held.any((arena) => identical(arena, current))) {
+      _held.add(_frames.hold(current));
+    }
+    final held = [..._held];
+    _held.clear();
     final done = <Future<bool>>[];
+    // A submit that throws keeps what it held: buffers already submitted
+    // may still read it.
     for (final buffer in _buffers) {
       final completer = Completer<bool>();
       buffer.submit(completionCallback: completer.complete);
       done.add(completer.future);
     }
     _buffers.clear();
-    return Future.wait(done).then((results) => results.every((ok) => ok));
+    return Future.wait(done).then((results) {
+      for (final arena in held) {
+        _frames.release(arena);
+      }
+      return results.every((ok) => ok);
+    });
   }
 
   static gpu.ColorAttachment _color(GpuColorTarget c) => gpu.ColorAttachment(

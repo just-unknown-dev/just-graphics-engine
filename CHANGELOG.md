@@ -4,6 +4,7 @@
 * Overlays and wireframes: `OverlayDraw` in `RenderScene.overlays`, drawn last with line topology; `GpuPrimitive.edges` (`ModelUploader(keepEdges:)`).
 * View modes (`RenderViewMode`: lit, unlit, wireframe), a clip plane, and the editor's unlit view in the lit shader.
 * Layered materials (`MaterialData.layered`: four colour layers weighed by vertex colour) and texture coordinates in metres or from the world (`MaterialData.uvMode`); `ModelUploader.material(maps:)` takes every map.
+* Frames drawn before the GPU runs them keep their own data. `GpuDevice.frameData` came from Flutter GPU's `HostBuffer`, which hands a frame's memory out again four frames later whether or not the GPU has read it: an app drawing five or more views a frame (an editor's split view and its game preview) drew views with another's camera, sky and lights, flickering. Each frame now writes into memory of its own, reused once the GPU has finished with it, and so does each frame's joint texture.
 
 ## 0.1.0-dev.1
 

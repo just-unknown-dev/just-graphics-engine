@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -455,7 +456,11 @@ final class Renderer3D {
   final List<SkinPalette> _palettes = [];
   Float32List _instanceData = Float32List(_skinnedInstanceFloats * 256);
   Float32List _jointData = Float32List(0);
-  final List<GpuTexture?> _jointTextures = [null, null, null];
+  // Joint textures the GPU has finished drawing with, free to write again:
+  // a frame takes one and gives it back once drawn. Frames drawn faster
+  // than the GPU runs them (an editor's views, each a frame) each have
+  // their own.
+  final List<GpuTexture> _spareJoints = [];
   int _frame = 0;
 
   bool _skinned(MeshInstance i) => i.skin != null && i.primitive.skin != null;
@@ -701,6 +706,13 @@ final class Renderer3D {
 
     final done = commands.submit(present: frame);
     targets.endFrame();
+    if (joints != null) {
+      unawaited(
+        done.then((_) {
+          if (_spareJoints.length < 4) _spareJoints.add(joints);
+        }, onError: (Object _) {}),
+      );
+    }
     return done;
   }
 
@@ -1058,8 +1070,8 @@ final class Renderer3D {
   }
 
   /// Gathers the palettes of every skinned instance drawn this frame into
-  /// one joint texture (three texels per joint), uploaded into the next of
-  /// three textures so the GPU never reads one being written.
+  /// one joint texture (three texels per joint), one the GPU has finished
+  /// with, so it never reads one being written.
   GpuTexture? _packPalettes() {
     _palettes.clear();
     var texels = 0;
@@ -1097,18 +1109,19 @@ final class Renderer3D {
       _jointData.setAll(palette.texel * 4, palette.rows);
       stats.joints += palette.jointCount;
     }
-    final slot = _frame % _jointTextures.length;
-    var texture = _jointTextures[slot];
-    if (texture == null || texture.desc.height != height) {
-      texture = _jointTextures[slot] = device.createTexture(
-        GpuTextureDesc(
-          width: width,
-          height: height,
-          format: GpuFormat.rgba32f,
-          storage: GpuStorage.host,
-        ),
-      );
+    GpuTexture? texture;
+    while (texture == null && _spareJoints.isNotEmpty) {
+      final spare = _spareJoints.removeLast();
+      if (spare.desc.height == height) texture = spare;
     }
+    texture ??= device.createTexture(
+      GpuTextureDesc(
+        width: width,
+        height: height,
+        format: GpuFormat.rgba32f,
+        storage: GpuStorage.host,
+      ),
+    );
     texture.upload(_jointData.buffer.asByteData(0, floats * 4));
     return texture;
   }

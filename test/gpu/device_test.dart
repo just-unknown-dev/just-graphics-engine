@@ -180,6 +180,47 @@ void main() {
         reason: 'corner ${px.at(1, 1)}');
   }, skip: skip);
 
+  test('frames recorded before the GPU ran them keep their own frame data', () async {
+    // An editor draws the scene several times a frame (a split view, a
+    // preview through the game camera), none waiting for the GPU. Frame
+    // data written over by a later frame drew one view with another's
+    // camera and sky. Here every frame is recorded before any is
+    // submitted, so the GPU is sure to run each after the later ones
+    // were written.
+    final pipeline = unlit();
+    final white = solid([255, 255, 255, 255]);
+    final vertices = device.createBuffer(_floats(quad(-1, -1, 1, 1, 0.5)));
+    const tints = [
+      [1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0],
+      [1.0, 1.0, 0.0, 1.0], [0.0, 1.0, 1.0, 1.0], [1.0, 0.0, 1.0, 1.0],
+      [1.0, 1.0, 1.0, 1.0], [0.5, 0.5, 0.5, 1.0],
+    ];
+    final frames = <(GpuTexture, GpuCommands)>[];
+    for (final tint in tints) {
+      final (color, targets) = _targets(device);
+      device.beginFrame();
+      final commands = device.commands();
+      commands.beginPass(targets)
+        ..setPipeline(pipeline)
+        ..setVertexBuffer(0, vertices.view())
+        ..setUniforms('Frame', device.frameData(_frame(pipeline, _engineClip(), tint)))
+        ..setTexture('base_texture', white)
+        ..setDepth(test: false, write: false)
+        ..setCull(GpuCull.none)
+        ..draw(6);
+      frames.add((color, commands));
+    }
+    final done = [for (final (_, commands) in frames) commands.submit()];
+    for (var i = 0; i < tints.length; i++) {
+      final (color, _) = frames[i];
+      expect(await done[i], isTrue);
+      final px = await readPixels(color.toImage());
+      final want = [for (final c in tints[i]) (c * 255).round()];
+      expect(colorClose(px.atFraction(0.5, 0.5), want), isTrue,
+          reason: 'frame $i drew ${px.atFraction(0.5, 0.5)}, not $want');
+    }
+  }, skip: skip);
+
   test('instancing: one draw, four instances, four quadrants', () async {
     final pipeline = device.pipeline(
       core['InstancedVertex']!,

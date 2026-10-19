@@ -43,12 +43,17 @@ abstract interface class GpuDevice {
     GpuVertexLayout? layout,
   });
 
-  /// Starts a frame: data from [frameData] in earlier frames may be reused.
-  /// Call once per frame, before recording.
+  /// Starts a frame — each view drawn is one. Call before recording it.
+  ///
+  /// Earlier frames' [frameData] stays as it was until the GPU has finished
+  /// the command lists recorded with it, so frames may be recorded faster
+  /// than the GPU runs them.
   void beginFrame();
 
   /// Copies [data] into this frame's transient memory, aligned for use as
-  /// uniforms, vertices or indices.
+  /// uniforms, vertices or indices. A [commands] list made or submitted
+  /// during the frame keeps it from being written again until the GPU has
+  /// finished that list.
   GpuBufferView frameData(ByteData data);
 
   /// A list of commands to record and submit.

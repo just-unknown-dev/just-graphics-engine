@@ -43,7 +43,7 @@ What the GPU draws depends on the platform, the backend and the device, so a bug
 - for a drawing bug, a screenshot and `renderer.stats` for that frame;
 - for a crash or a hang, whether `flutter test --enable-impeller --enable-flutter-gpu --tags gpu` passes on your machine.
 
-A bug in the editor's 3D side (model thumbnails, picking, the model import workspace, the Model, Light and Environment inspector sections) belongs to `just_graphics_editor`. The 3D components (Model, Light, Environment, the shapes), scene loading, the camera and 3D physics belong to `just_game_engine`.
+A bug in the editor's 3D side (model thumbnails, picking, the model import workspace, the Model, Light and Environment inspector sections) belongs to `just_game_engine_editor` (its `lib/src/graphics/`). The 3D components (Model, Light, Environment, the shapes), scene loading, the camera and 3D physics belong to `just_game_engine`.
 
 For a feature, open an issue labelled **`enhancement`** that describes the problem it solves and how it should behave. The package's scope is drawing 3D in Flutter: the GPU layer over Flutter GPU, glTF loading and model import, meshes made in code, the renderer and `Scene3DView`. It knows no game engine (just_game_engine builds on it). A shader change reaches every backend Flutter GPU runs on, and a renderer change every just_game_engine game, so open the issue first and agree the approach before you write it.
 
@@ -94,7 +94,7 @@ Then run `flutter pub get`. Delete the file (or the entry) and run `flutter pub 
 
 Do not change `pubspec.yaml` to a path dependency. If your pull request needs a version of `just_dart` that is not published yet, say so in the pull request: this package can only be released after it.
 
-`just_game_engine` (its `graphics_3d.dart`) and `just_graphics_editor` (the editor's 3D side) depend on this package, and `just_game_engine_cli` (the game commands of `just`) writes the Flutter GPU switches into the runners of any new 3D game when `just create` makes it (`GameTemplate.flutterGpuRunners`). If you change the public API, a file format or how Flutter GPU is turned on, say in the pull request what they will need.
+`just_game_engine` (its `graphics_3d.dart`) depends on this package, and `just_game_engine_editor` (its 3D side, `lib/src/graphics/`) uses it through the engine, and `just_game_engine_cli` (the game commands of `just`) writes the Flutter GPU switches into the runners of any new 3D game when `just create` makes it (`GameTemplate.flutterGpuRunners`). If you change the public API, a file format or how Flutter GPU is turned on, say in the pull request what they will need.
 
 ---
 
@@ -210,7 +210,7 @@ flutter test integration_test -d windows   # draws it; saves build/demo.png
    ```
 4. For a change to the GPU layer, a shader or the renderer, also draw the example in a window, as in [Running the Tests](#running-the-tests).
 5. Commit with a [conventional commit message](#commit-message-convention).
-6. Push to your fork and open a pull request against `main`. Say what changed and why, and which platforms you ran it on. List any unpublished `just_dart` version it needs, and any change it means for `just_game_engine` or `just_graphics_editor`.
+6. Push to your fork and open a pull request against `main`. Say what changed and why, and which platforms you ran it on. List any unpublished `just_dart` version it needs, and any change it means for `just_game_engine` or `just_game_engine_editor`.
 7. Answer review feedback.
 
 Small pull requests are easier to review.
